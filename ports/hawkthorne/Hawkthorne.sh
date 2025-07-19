@@ -13,7 +13,7 @@ else
 fi
 
 source $controlfolder/control.txt
-
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
 GAMEDIR=/$directory/ports/hawkthorne
@@ -22,13 +22,17 @@ GAMEDIR=/$directory/ports/hawkthorne
 cd $GAMEDIR
 
 export LOVE_GRAPHICS_USE_OPENGLES=1
-export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
+#export LD_LIBRARY_PATH="$PWD/libs:$LD_LIBRARY_PATH"
 
 $ESUDO chmod 666 /dev/uinput
 
-$GPTOKEYB "love" &
-./love hawkthorne.love
+# Source love2d runtime
+source $controlfolder/runtimes/"love_11.5"/love.txt
 
-$ESUDO kill -9 $(pidof gptokeyb)
-$ESUDO systemctl restart oga_events &
-printf "\033c" > /dev/tty0
+# Use the love runtime
+$GPTOKEYB "$LOVE_GPTK" &
+pm_platform_helper "$LOVE_BINARY"
+$LOVE_RUN hawkthorne.love
+
+# Cleanup any running gptokeyb instances, and any platform specific stuff.
+pm_finish
