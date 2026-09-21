@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_branch }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -63,12 +63,12 @@ jobs:
           manifest_file = Path("releases/manifest.json")
           manifest = {}
 
-          # 1. Try reading existing manifest file safely
+          # 1. Safely load existing manifest if not blank
           if manifest_file.is_file():
-              content = manifest_file.read_text(encoding="utf-8").strip()
-              if content:
+              raw_text = manifest_file.read_text(encoding="utf-8").strip()
+              if raw_text:
                   try:
-                      manifest = json.loads(content)
+                      manifest = json.loads(raw_text)
                       print(f"Loaded existing manifest.json with {len(manifest)} entries.")
                   except Exception as e:
                       print(f"Warning: Could not parse local manifest.json: {e}")
@@ -111,21 +111,21 @@ jobs:
 
               rel_path = f"{port_dir.name}/port.json"
               try:
-                  with open(port_json_file, "r", encoding="utf-8") as f:
-                      port_data = json.load(f)
+                  p_text = port_json_file.read_text(encoding="utf-8").strip()
+                  if not p_text:
+                      continue
 
+                  port_data = json.loads(p_text)
                   b_hash = get_port_build_hash(port_data)
-                  
-                  # Use existing raw hash if present in manifest; otherwise calculate MD5 from file
                   raw_hash = manifest.get(rel_path) or get_file_md5(port_json_file)
 
                   manifest[rel_path] = raw_hash
                   manifest[f"{rel_path}:v2"] = f"{b_hash}:{raw_hash}"
                   count += 1
               except Exception as e:
-                  print(f"Error processing {rel_path}: {e}")
+                  print(f"Skipping bad port {rel_path}: {e}")
 
-          # 4. Save updated manifest
+          # 4. Write back the updated manifest
           manifest_file.parent.mkdir(parents=True, exist_ok=True)
           with open(manifest_file, "w", encoding="utf-8") as f:
               json.dump(manifest, f, indent=2, sort_keys=True)
