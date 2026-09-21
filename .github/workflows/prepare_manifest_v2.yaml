@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_branch }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,6 +32,7 @@ jobs:
           python3 - << 'EOF'
           import hashlib
           import json
+          import urllib.request
           from pathlib import Path
 
           BUILD_CRITICAL_ATTR_KEYS = {"runtime", "arch"}
@@ -52,14 +53,51 @@ jobs:
               serialized = json.dumps(filtered, sort_keys=True, separators=(",", ":"))
               return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
+          def get_file_md5(path: Path) -> str:
+              h = hashlib.md5()
+              with open(path, "rb") as f:
+                  while chunk := f.read(65536):
+                      h.update(chunk)
+              return h.hexdigest()
+
           manifest_file = Path("releases/manifest.json")
-          if not manifest_file.is_file():
-              print("Error: releases/manifest.json not found!")
-              exit(1)
+          manifest = {}
 
-          with open(manifest_file, "r") as f:
-              manifest = json.load(f)
+          # 1. Safely load existing manifest if not blank
+          if manifest_file.is_file():
+              raw_text = manifest_file.read_text(encoding="utf-8").strip()
+              if raw_text:
+                  try:
+                      manifest = json.loads(raw_text)
+                      print(f"Loaded existing manifest.json with {len(manifest)} entries.")
+                  except Exception as e:
+                      print(f"Warning: Could not parse local manifest.json: {e}")
+                      manifest = {}
 
+          # 2. If manifest is empty, try downloading the latest release manifest
+          if not manifest:
+              release_org = "PortsMaster"
+              release_repo = "PortMaster-New"
+
+              if Path("SOURCE_SETUP.txt").is_file():
+                  for line in Path("SOURCE_SETUP.txt").read_text().splitlines():
+                      if "RELEASE_ORG" in line and '"' in line:
+                          release_org = line.split('"')[1].strip()
+                      if "RELEASE_REPO" in line and '"' in line:
+                          release_repo = line.split('"')[1].strip()
+
+              url = f"https://github.com/{release_org}/{release_repo}/releases/latest/download/manifest.json"
+              print(f"Attempting to fetch latest release manifest from: {url}")
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      manifest = json.loads(resp.read().decode("utf-8"))
+                      print(f"Successfully fetched release manifest with {len(manifest)} entries.")
+              except Exception as e:
+                  print(f"Note: Could not fetch from releases ({e}). Building from local files.")
+                  manifest = {}
+
+          # 3. Iterate over all ports and backfill :v2 hashes
           ports_dir = Path("ports")
           count = 0
 
@@ -72,19 +110,24 @@ jobs:
                   continue
 
               rel_path = f"{port_dir.name}/port.json"
-              if rel_path in manifest:
-                  try:
-                      with open(port_json_file, "r") as f:
-                          port_data = json.load(f)
+              try:
+                  p_text = port_json_file.read_text(encoding="utf-8").strip()
+                  if not p_text:
+                      continue
 
-                      b_hash = get_port_build_hash(port_data)
-                      raw_hash = manifest[rel_path]
-                      manifest[f"{rel_path}:v2"] = f"{b_hash}:{raw_hash}"
-                      count += 1
-                  except Exception as e:
-                      print(f"Error processing {rel_path}: {e}")
+                  port_data = json.loads(p_text)
+                  b_hash = get_port_build_hash(port_data)
+                  raw_hash = manifest.get(rel_path) or get_file_md5(port_json_file)
 
-          with open(manifest_file, "w") as f:
+                  manifest[rel_path] = raw_hash
+                  manifest[f"{rel_path}:v2"] = f"{b_hash}:{raw_hash}"
+                  count += 1
+              except Exception as e:
+                  print(f"Skipping bad port {rel_path}: {e}")
+
+          # 4. Write back the updated manifest
+          manifest_file.parent.mkdir(parents=True, exist_ok=True)
+          with open(manifest_file, "w", encoding="utf-8") as f:
               json.dump(manifest, f, indent=2, sort_keys=True)
 
           print(f"Successfully backfilled {count} port entries with :v2 build hashes.")
