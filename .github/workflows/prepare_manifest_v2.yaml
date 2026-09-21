@@ -16,11 +16,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (Sparse - only port.json files)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 1
+          sparse-checkout: |
+            ports/*/port.json
+            releases/manifest.json
+            SOURCE_SETUP.txt
+          sparse-checkout-cone-mode: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
